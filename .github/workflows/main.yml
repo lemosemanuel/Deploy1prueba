@@ -1,1 +1,45 @@
+name: Login, Build and Push Container Image to SWR
+on:
+  push:
+    branches: [ develop ]
 
+jobs:
+  push_to_registry:
+    name: Login, Build and Push Container Image to SWR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+      - name: Configure app
+        run:  |
+          echo "${{ secrets.NPM_URL }}" > .npmrc
+          echo "${{ secrets.NPM_TOKEN }}" >> .npmrc
+      
+      - name: Login to Huawei SWR
+        run: echo "${{ secrets.PRD_HC_DOCKER_PASSWORD }}" | docker login "${{ secrets.PRD_HC_DOCKER_IMAGE_REPO }}" --username "${{ secrets.PRD_HC_DOCKER_USERNAME }}" --password-stdin 
+      
+      - name: Lowercase Variables
+        run: echo "IHSACUSTOM_GITHUB_REPOSITORY=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+      
+      - name: Build with Dockerfile in root directory
+        run: docker build -t "${{ secrets.PRD_HC_DOCKER_IMAGE_REPO }}"/"${{ env.IHSACUSTOM_GITHUB_REPOSITORY}}":"$GITHUB_SHA" .
+      
+      - name: Push image to registry
+        run: docker push "${{ secrets.PRD_HC_DOCKER_IMAGE_REPO }}"/"${{ env.IHSACUSTOM_GITHUB_REPOSITORY}}":"$GITHUB_SHA"
+
+
+  deploy-to-cluster:
+    name: deploy to cluster
+    runs-on: ubuntu-latest
+    env: 
+      REGISTRY_NAME: PRD_HC_DOCKER_IMAGE_REPO
+    needs: push_to_registry
+    steps:
+    - name: Lowercase Variables
+      run: echo "IHSACUSTOM_GITHUB_REPOSITORY=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+    - name: Login in and deploy image to cluster
+      run: |
+       mkdir -p ~/.kube
+       echo "${{ secrets.DEV_HC_CCE_USER_ADMIN  }}" | base64 --decode > ~/.kube/config
+       export KUBECONFIG=~/.kube/config
+       kubectl set image deployment/"${{ github.event.repository.name }}"-deployment "${{ github.event.repository.name }}"="${{ secrets.PRD_HC_DOCKER_IMAGE_REPO }}"/"${{ env.IHSACUSTOM_GITHUB_REPOSITORY}}":"$GITHUB_SHA" -n dev
